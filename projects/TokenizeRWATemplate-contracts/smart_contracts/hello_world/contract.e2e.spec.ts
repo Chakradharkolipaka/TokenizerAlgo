@@ -5,6 +5,8 @@ import { Address } from 'algosdk'
 import { beforeAll, beforeEach, describe, expect, test } from 'vitest'
 import { HelloWorldFactory } from '../artifacts/hello_world/HelloWorldClient'
 
+const E2E_TIMEOUT_MS = 60_000
+
 describe('HelloWorld contract', () => {
   const localnet = algorandFixture()
   beforeAll(() => {
@@ -14,7 +16,7 @@ describe('HelloWorld contract', () => {
     })
     registerDebugEventHandlers()
   })
-  beforeEach(localnet.newScope)
+  beforeEach(localnet.newScope, E2E_TIMEOUT_MS)
 
   const deploy = async (account: Address) => {
     const factory = localnet.algorand.client.getTypedAppFactory(HelloWorldFactory, {
@@ -35,7 +37,7 @@ describe('HelloWorld contract', () => {
     const result = await client.send.hello({ args: { name: 'World' } })
 
     expect(result.return).toBe('Hello, World')
-  })
+  }, E2E_TIMEOUT_MS)
 
   test('simulate says hello with correct budget consumed', async () => {
     const { testAccount } = localnet.context
@@ -49,5 +51,5 @@ describe('HelloWorld contract', () => {
     expect(result.returns[0]).toBe('Hello, World')
     expect(result.returns[1]).toBe('Hello, Jane')
     expect(result.simulateResponse.txnGroups[0].appBudgetConsumed).toBeLessThan(100)
-  })
+  }, E2E_TIMEOUT_MS)
 })

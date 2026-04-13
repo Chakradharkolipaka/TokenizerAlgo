@@ -65,7 +65,7 @@
     "typecheck": "tsc --noEmit",
     "generate:app-clients": "sh -c 'command -v algokit >/dev/null 2>&1 && algokit project link --all || echo \"algokit not found; skipping client generation\"'",
     "build": "npm run generate:app-clients && tsc && vite build",
-    "vercel-build": "npm ci && npm run build"
+    "vercel-build": "tsc && vite build"
   },
   "eslintConfig": {
     "extends": [

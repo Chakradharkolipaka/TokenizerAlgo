@@ -115,6 +115,15 @@ function decimalToBaseUnits(value: string, decimals: number): bigint {
   return BigInt(combined || '0')
 }
 
+function getAlgorandErrorMessage(error: unknown): string {
+  const e = error as any
+  return e?.response?.body?.message || e?.response?.text || e?.message || String(error)
+}
+
+function isTxnDeadError(error: unknown): boolean {
+  return getAlgorandErrorMessage(error).toLowerCase().includes('txn dead')
+}
+
 /**
  * TokenizeAsset Component
  * Main form for creating Algorand Standard Assets (ASAs)
@@ -507,6 +516,43 @@ export default function TokenizeAsset() {
     setNftClawback('')
   }
 
+  const getAssetHoldingForAddress = useCallback(
+    async (address: string, assetId: bigint): Promise<{ optedIn: boolean; amount: bigint }> => {
+      try {
+        const holding = await algorand.asset.getAccountInformation(address, assetId)
+        const holdingAny = holding as any
+        const amount = BigInt(holdingAny?.amount ?? holdingAny?.balance ?? 0)
+        return { optedIn: true, amount }
+      } catch (e: any) {
+        const msg = getAlgorandErrorMessage(e).toLowerCase()
+        const isNotFound =
+          msg.includes('not found') ||
+          msg.includes('404') ||
+          e?.status === 404 ||
+          e?.response?.status === 404
+
+        if (isNotFound) return { optedIn: false, amount: 0n }
+        throw e
+      }
+    },
+    [algorand],
+  )
+
+  const sendWithTxnDeadRetry = useCallback(
+    async <T,>(sendFn: () => Promise<T>): Promise<T> => {
+      try {
+        return await sendFn()
+      } catch (firstError) {
+        if (!isTxnDeadError(firstError)) throw firstError
+
+        // Wallet confirmation delays can make round windows expire; retry with fresh params.
+        enqueueSnackbar('Transaction window expired, retrying once...', { variant: 'info' })
+        return await sendFn()
+      }
+    },
+    [enqueueSnackbar],
+  )
+
   const isWholeNumber = (v: string) => /^\d+$/.test(v)
 
   const copyToClipboard = async (text: string) => {
@@ -688,12 +734,14 @@ export default function TokenizeAsset() {
       if (transferMode === 'algo') {
         enqueueSnackbar('Sending ALGO...', { variant: 'info' })
 
-        const result = await algorand.send.payment({
-          sender: activeAddress,
-          signer,
-          receiver: receiverAddress,
-          amount: microAlgos(decimalToBaseUnits(transferAmount, ALGO_DECIMALS)),
-        })
+        const result = await sendWithTxnDeadRetry(() =>
+          algorand.send.payment({
+            sender: activeAddress,
+            signer,
+            receiver: receiverAddress,
+            amount: microAlgos(decimalToBaseUnits(transferAmount, ALGO_DECIMALS)),
+          }),
+        )
 
         const txId = (result as { txId?: string }).txId
 
@@ -731,13 +779,21 @@ export default function TokenizeAsset() {
           return
         }
 
-        const result = await algorand.send.assetTransfer({
-          sender: activeAddress,
-          signer,
-          assetId: BigInt(TESTNET_USDC_ASSET_ID),
-          receiver: receiverAddress,
-          amount: usdcAmount,
-        })
+        const receiverHolding = await getAssetHoldingForAddress(receiverAddress, BigInt(TESTNET_USDC_ASSET_ID))
+        if (!receiverHolding.optedIn) {
+          enqueueSnackbar('Recipient is not opted in to USDC. Ask them to opt in first.', { variant: 'warning' })
+          return
+        }
+
+        const result = await sendWithTxnDeadRetry(() =>
+          algorand.send.assetTransfer({
+            sender: activeAddress,
+            signer,
+            assetId: BigInt(TESTNET_USDC_ASSET_ID),
+            receiver: receiverAddress,
+            amount: usdcAmount,
+          }),
+        )
 
         const txId = (result as { txId?: string }).txId
 
@@ -764,13 +820,34 @@ export default function TokenizeAsset() {
         // manual ASA
         enqueueSnackbar('Transferring asset...', { variant: 'info' })
 
-        const result = await algorand.send.assetTransfer({
-          sender: activeAddress,
-          signer,
-          assetId: BigInt(transferAssetId),
-          receiver: receiverAddress,
-          amount: BigInt(transferAmount),
-        })
+        const manualAssetId = BigInt(transferAssetId)
+        const amountToSend = BigInt(transferAmount)
+
+        const senderHolding = await getAssetHoldingForAddress(activeAddress, manualAssetId)
+        if (!senderHolding.optedIn) {
+          enqueueSnackbar('Your wallet is not opted in to this asset. Opt in first before sending.', { variant: 'warning' })
+          return
+        }
+        if (senderHolding.amount < amountToSend) {
+          enqueueSnackbar('Insufficient asset balance for this transfer.', { variant: 'warning' })
+          return
+        }
+
+        const receiverHolding = await getAssetHoldingForAddress(receiverAddress, manualAssetId)
+        if (!receiverHolding.optedIn) {
+          enqueueSnackbar('Recipient is not opted in to this asset. Ask them to opt in first.', { variant: 'warning' })
+          return
+        }
+
+        const result = await sendWithTxnDeadRetry(() =>
+          algorand.send.assetTransfer({
+            sender: activeAddress,
+            signer,
+            assetId: manualAssetId,
+            receiver: receiverAddress,
+            amount: amountToSend,
+          }),
+        )
 
         const txId = (result as { txId?: string }).txId
 
@@ -793,12 +870,19 @@ export default function TokenizeAsset() {
       setReceiverAddress('')
       setTransferAmount('1')
     } catch (error) {
-      if (transferMode === 'algo') {
-        enqueueSnackbar('ALGO send failed.', { variant: 'error' })
+      const msg = getAlgorandErrorMessage(error)
+      const lower = msg.toLowerCase()
+
+      if (lower.includes('must optin')) {
+        enqueueSnackbar('Transfer failed: recipient must opt in to the asset first.', { variant: 'error' })
+      } else if (lower.includes('asset') && lower.includes('missing')) {
+        enqueueSnackbar('Transfer failed: sender or receiver is missing this asset (opt-in required).', { variant: 'error' })
+      } else if (lower.includes('txn dead')) {
+        enqueueSnackbar('Transfer failed: transaction expired before confirmation. Please retry.', { variant: 'error' })
+      } else if (transferMode === 'algo') {
+        enqueueSnackbar(`ALGO send failed: ${msg}`, { variant: 'error' })
       } else {
-        enqueueSnackbar('Transfer failed. If sending an ASA (incl. USDC), make sure the recipient has opted in.', {
-          variant: 'error',
-        })
+        enqueueSnackbar(`Transfer failed: ${msg}`, { variant: 'error' })
       }
     } finally {
       setTransferLoading(false)

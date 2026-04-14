@@ -124,7 +124,6 @@ app.post('/api/pin-image', upload.single('file'), async (req, res) => {
     const properties = safeJsonParse(req.body?.properties, {})
 
     const stream = fs.createReadStream(file.path)
-    stream.path = file.originalname || 'upload'
 
     const imageResult = await pinata.pinFileToIPFS(stream, {
       pinataMetadata: { name: file.originalname || `${metaName} Image` },

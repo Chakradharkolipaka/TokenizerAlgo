@@ -2,7 +2,6 @@ name: Pull Request validation
 
 on: [pull_request]
 
-
 jobs:
   TokenizeRWATemplate-contracts-ci:
     name: Run TokenizeRWATemplate-contracts validation
@@ -11,4 +10,3 @@ jobs:
   TokenizeRWATemplate-frontend-ci:
     name: Run TokenizeRWATemplate-frontend validation
     uses: ./.github/workflows/tokenizerwatemplate-frontend-ci.yaml
-

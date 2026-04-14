@@ -18,21 +18,21 @@ jobs:
   TokenizeRWATemplate-contracts-validate:
     name: Run TokenizeRWATemplate-contracts release
     secrets: inherit
-    uses: ./.github/workflows/TokenizeRWATemplate-contracts-ci.yaml
+    uses: ./.github/workflows/tokenizerwatemplate-contracts-ci.yaml
 
   TokenizeRWATemplate-contracts-release:
     name: Run TokenizeRWATemplate-contracts release
     secrets: inherit
-    uses: ./.github/workflows/TokenizeRWATemplate-contracts-cd.yaml
+    uses: ./.github/workflows/tokenizerwatemplate-contracts-cd.yaml
     needs: TokenizeRWATemplate-contracts-validate
 
   TokenizeRWATemplate-frontend-validate:
     name: Run TokenizeRWATemplate-frontend release
     secrets: inherit
-    uses: ./.github/workflows/TokenizeRWATemplate-frontend-ci.yaml
+    uses: ./.github/workflows/tokenizerwatemplate-frontend-ci.yaml
 
   TokenizeRWATemplate-frontend-release:
     name: Run TokenizeRWATemplate-frontend release
     secrets: inherit
-    uses: ./.github/workflows/TokenizeRWATemplate-frontend-cd.yaml
+    uses: ./.github/workflows/tokenizerwatemplate-frontend-cd.yaml
     needs: TokenizeRWATemplate-frontend-validate

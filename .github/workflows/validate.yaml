@@ -6,9 +6,9 @@ on: [pull_request]
 jobs:
   TokenizeRWATemplate-contracts-ci:
     name: Run TokenizeRWATemplate-contracts validation
-    uses: ./.github/workflows/TokenizeRWATemplate-contracts-ci.yaml
+    uses: ./.github/workflows/tokenizerwatemplate-contracts-ci.yaml
 
   TokenizeRWATemplate-frontend-ci:
     name: Run TokenizeRWATemplate-frontend validation
-    uses: ./.github/workflows/TokenizeRWATemplate-frontend-ci.yaml
+    uses: ./.github/workflows/tokenizerwatemplate-frontend-ci.yaml
 

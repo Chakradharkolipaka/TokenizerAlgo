@@ -6,15 +6,15 @@ const config: Config.InitialOptions = {
   testMatch: ['**/*.spec.ts', '**/*.spec.tsx'],
   moduleDirectories: ['node_modules', 'src'],
   transform: {
-    '<regex_match_files>': [
+    '^.+\\.(ts|tsx)$': [
       'ts-jest',
       {
-        tsconfig: 'tsconfig.test.json',
+        tsconfig: 'tsconfig.json',
       },
     ],
   },
   coveragePathIgnorePatterns: ['tests'],
   testPathIgnorePatterns: ['/tests/'],
-  }
+}
 
 export default config

@@ -5,7 +5,6 @@ import dotenv from 'dotenv'
 import express from 'express'
 import multer from 'multer'
 import fs from 'fs'
-import { Readable } from 'stream'
 
 // Load local .env for dev. In Vercel, env vars come from platform.
 dotenv.config()
@@ -64,19 +63,109 @@ app.options('*', cors(corsOptions))
 
 app.use(express.json())
 
-// Pinata client
-const pinata =
-  process.env.PINATA_JWT && process.env.PINATA_JWT.trim().length > 0
-    ? new pinataSDK({ pinataJWTKey: process.env.PINATA_JWT })
-    : new pinataSDK(process.env.PINATA_API_KEY || '', process.env.PINATA_API_SECRET || '')
+const hasJwt = Boolean(process.env.PINATA_JWT && process.env.PINATA_JWT.trim())
+const hasApiKeys = Boolean(process.env.PINATA_API_KEY && process.env.PINATA_API_SECRET)
+
+const pinataWithJwt = hasJwt ? new pinataSDK({ pinataJWTKey: process.env.PINATA_JWT }) : null
+const pinataWithApiKeys = hasApiKeys
+  ? new pinataSDK(process.env.PINATA_API_KEY || '', process.env.PINATA_API_SECRET || '')
+  : null
+
+function getPinataErrorMessage(error) {
+  const responseData = error?.response?.data
+
+  // Pinata often returns structured reasons/details under response.data
+  if (typeof responseData === 'string' && responseData.trim()) return responseData
+
+  if (responseData && typeof responseData === 'object') {
+    const reason = typeof responseData.reason === 'string' ? responseData.reason : ''
+    const details = typeof responseData.details === 'string' ? responseData.details : ''
+    const message =
+      typeof responseData.error === 'string'
+        ? responseData.error
+        : typeof responseData.message === 'string'
+        ? responseData.message
+        : ''
+
+    if (reason || details || message) {
+      return [message, reason, details].filter(Boolean).join(' | ')
+    }
+  }
+
+  if (typeof error?.message === 'string' && error.message.trim()) return error.message
+  return 'Failed to pin to IPFS.'
+}
+
+function isScopeError(error) {
+  const msg = getPinataErrorMessage(error).toUpperCase()
+  return msg.includes('NO_SCOPES_FOUND') || msg.includes('SCOPE') || msg.includes('FORBIDDEN')
+}
+
+async function pinWithFallback(file, metaName, metadata) {
+  const clients = [
+    { client: pinataWithJwt, label: 'PINATA_JWT' },
+    { client: pinataWithApiKeys, label: 'PINATA_API_KEY/PINATA_API_SECRET' },
+  ].filter((entry) => Boolean(entry.client))
+
+  if (clients.length === 0) {
+    throw new Error('Pinata credentials missing. Set PINATA_JWT or PINATA_API_KEY + PINATA_API_SECRET.')
+  }
+
+  let lastError = null
+
+  for (const entry of clients) {
+    try {
+      const stream = fs.createReadStream(file.path)
+      const imageResult = await entry.client.pinFileToIPFS(stream, {
+        pinataMetadata: { name: file.originalname || `${metaName} Image` },
+      })
+
+      const imageUrl = `ipfs://${imageResult.IpfsHash}`
+      const jsonResult = await entry.client.pinJSONToIPFS(
+        {
+          ...metadata,
+          image: imageUrl,
+        },
+        {
+          pinataMetadata: { name: `${metaName} Metadata` },
+        },
+      )
+
+      return {
+        metadataUrl: `ipfs://${jsonResult.IpfsHash}`,
+        usedCredential: entry.label,
+      }
+    } catch (error) {
+      lastError = error
+      const reason = getPinataErrorMessage(error)
+      console.error(`Pinata pin failed with ${entry.label}:`, reason)
+
+      // Continue only for credential/scope-related failures.
+      if (!isScopeError(error)) break
+    }
+  }
+
+  throw lastError || new Error('Failed to pin to IPFS.')
+}
 
 // Optional: test credentials at cold start
 ;(async () => {
-  try {
-    const auth = await pinata.testAuthentication?.()
-    console.log('Pinata auth OK:', auth || 'ok')
-  } catch (e) {
-    console.error('Pinata authentication FAILED. Check env vars.', e)
+  if (pinataWithJwt) {
+    try {
+      const auth = await pinataWithJwt.testAuthentication?.()
+      console.log('Pinata auth OK via PINATA_JWT:', auth || 'ok')
+    } catch (e) {
+      console.error('Pinata authentication FAILED via PINATA_JWT.', getPinataErrorMessage(e))
+    }
+  }
+
+  if (pinataWithApiKeys) {
+    try {
+      const auth = await pinataWithApiKeys.testAuthentication?.()
+      console.log('Pinata auth OK via API keys:', auth || 'ok')
+    } catch (e) {
+      console.error('Pinata authentication FAILED via API keys.', getPinataErrorMessage(e))
+    }
   }
 })()
 
@@ -123,33 +212,29 @@ app.post('/api/pin-image', upload.single('file'), async (req, res) => {
     const metaDescription = safeTrim(req.body?.metaDescription) || 'Pinned via TokenizeRWA template'
     const properties = safeJsonParse(req.body?.properties, {})
 
-    const stream = fs.createReadStream(file.path)
+    const metadata = {
+      name: metaName,
+      description: metaDescription,
+      properties,
+    }
 
-    const imageResult = await pinata.pinFileToIPFS(stream, {
-      pinataMetadata: { name: file.originalname || `${metaName} Image` },
-    })
+    const result = await pinWithFallback(file, metaName, metadata)
 
     // Clean up temporary file asynchronously
     fs.unlink(file.path, () => {})
 
-    const imageUrl = `ipfs://${imageResult.IpfsHash}`
-
-    const metadata = {
-      name: metaName,
-      description: metaDescription,
-      image: imageUrl,
-      properties,
-    }
-
-    const jsonResult = await pinata.pinJSONToIPFS(metadata, {
-      pinataMetadata: { name: `${metaName} Metadata` },
-    })
-
-    return res.status(200).json({ metadataUrl: `ipfs://${jsonResult.IpfsHash}` })
+    return res.status(200).json({ metadataUrl: result.metadataUrl })
   } catch (error) {
-    console.error('Pinata upload error:', error)
-    const msg = error?.response?.data?.error || error?.response?.data || error?.message || 'Failed to pin to IPFS.'
-    return res.status(500).json({ error: msg })
+    // Ensure temp upload is cleaned even on failures.
+    if (req.file?.path) fs.unlink(req.file.path, () => {})
+
+    const msg = getPinataErrorMessage(error)
+    console.error('Pinata upload error:', msg)
+    return res.status(500).json({
+      error: msg,
+      hint:
+        'Verify Pinata credentials and scopes. Required: file pin + JSON pin permissions for the credential used by backend.',
+    })
   }
 })
 

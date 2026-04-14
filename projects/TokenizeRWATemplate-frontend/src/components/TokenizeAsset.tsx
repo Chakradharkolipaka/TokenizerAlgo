@@ -871,7 +871,17 @@ export default function TokenizeAsset() {
       })
 
       if (!response.ok) {
-        const errorText = await response.text()
+        const rawText = await response.text()
+        let errorText = rawText
+
+        try {
+          const parsed = JSON.parse(rawText) as { error?: string; hint?: string }
+          const msg = [parsed.error, parsed.hint].filter(Boolean).join(' | ')
+          if (msg) errorText = msg
+        } catch {
+          // Keep raw response text if it's not JSON.
+        }
+
         throw new Error(`Backend request failed: ${response.status} - ${errorText}`)
       }
 

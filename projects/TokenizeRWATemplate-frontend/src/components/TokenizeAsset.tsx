@@ -153,6 +153,7 @@ export default function TokenizeAsset() {
   const [receiverAddress, setReceiverAddress] = useState<string>('')
   const [transferAmount, setTransferAmount] = useState<string>('1')
   const [transferLoading, setTransferLoading] = useState<boolean>(false)
+  const [manualOptInLoading, setManualOptInLoading] = useState<boolean>(false)
 
   // ===== Mint Success state =====
   const [mintSuccessData, setMintSuccessData] = useState<MintedAssetInfo | null>(null)
@@ -552,6 +553,69 @@ export default function TokenizeAsset() {
     },
     [enqueueSnackbar],
   )
+
+  const handleManualAssetOptIn = async () => {
+    if (!activeAddress) {
+      enqueueSnackbar('Connect a wallet first to opt in.', { variant: 'warning' })
+      return
+    }
+
+    if (!signer) {
+      enqueueSnackbar('Wallet signer not available. Please reconnect your wallet.', { variant: 'error' })
+      return
+    }
+
+    if (transferMode !== 'manual' || !isWholeNumber(transferAssetId)) {
+      enqueueSnackbar('Enter a valid manual Asset ID to opt in.', { variant: 'warning' })
+      return
+    }
+
+    const assetId = BigInt(transferAssetId)
+
+    try {
+      setManualOptInLoading(true)
+
+      const currentHolding = await getAssetHoldingForAddress(activeAddress, assetId)
+      if (currentHolding.optedIn) {
+        enqueueSnackbar('This wallet is already opted in to the asset ✅', { variant: 'info' })
+        return
+      }
+
+      enqueueSnackbar('Submitting opt-in transaction...', { variant: 'info' })
+
+      const result = await sendWithTxnDeadRetry(() =>
+        algorand.send.assetTransfer({
+          sender: activeAddress,
+          signer,
+          assetId,
+          receiver: activeAddress,
+          amount: 0n,
+        }),
+      )
+
+      const txId = (result as { txId?: string }).txId
+
+      enqueueSnackbar('✅ Asset opt-in successful!', {
+        variant: 'success',
+        action: () =>
+          txId ? (
+            <a
+              href={`${LORA_BASE}/transaction/${txId}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ textDecoration: 'underline', marginLeft: 8 }}
+            >
+              View Tx on Lora ↗
+            </a>
+          ) : null,
+      })
+    } catch (error) {
+      const msg = getAlgorandErrorMessage(error)
+      enqueueSnackbar(`Asset opt-in failed: ${msg}`, { variant: 'error' })
+    } finally {
+      setManualOptInLoading(false)
+    }
+  }
 
   const isWholeNumber = (v: string) => /^\d+$/.test(v)
 
@@ -1764,6 +1828,21 @@ export default function TokenizeAsset() {
           </div>
 
           <div className="mt-6 flex flex-col sm:flex-row gap-3 sm:justify-end">
+            {transferMode === 'manual' && (
+              <button
+                type="button"
+                onClick={handleManualAssetOptIn}
+                disabled={manualOptInLoading || transferLoading || !activeAddress || !isWholeNumber(transferAssetId)}
+                className={`px-6 py-3 rounded-lg font-semibold transition ${
+                  manualOptInLoading || transferLoading || !activeAddress || !isWholeNumber(transferAssetId)
+                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed dark:bg-slate-700 dark:text-slate-400'
+                    : 'bg-slate-700 hover:bg-slate-800 text-white shadow-md dark:bg-slate-600 dark:hover:bg-slate-500'
+                }`}
+              >
+                {manualOptInLoading ? 'Opting In…' : 'Opt In This Asset'}
+              </button>
+            )}
+
             <button
               type="button"
               onClick={handleTransferAsset}
